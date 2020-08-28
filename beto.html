@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" type="text/css" href="./dist/Chatroom.css">
     <link rel="stylesheet" type="text/css" href="./index.css">
-    <title>Chatroom</title>
+    <title>Beto - Chatroom</title>
   </head>
   <body>
     <div class="chat-container"></div>
@@ -14,11 +14,11 @@
 window.chatroom = new window.Chatroom({
   title: "Serasa",
   container: document.querySelector(".chat-container"),
-  welcomeMessage: "Olá! Como eu posso te ajudar?",
+  welcomeMessage: "Olá! Sou o Beto, como posso te ajudar?",
   host: "http://localhost:5005",
-  isClientExternal: true,
+  isClientExternal: false,
   endpoint: "http://127.0.0.1:4001",
-  idAttendant: null,
+  idAttendant: "2d074b08-e8b2-11ea-adc1-0242ac120002",
   speechRecognition: "pt-BR",
   // voiceLang: "pt-BR"
 });

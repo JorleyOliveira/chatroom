@@ -17,18 +17,18 @@ const GROUP_INTERVAL = 60000;
 
 export type MessageType =
   | {
-      type: "text",
-      text: string
-    }
+    type: "text",
+    text: string
+  }
   | { type: "image", image: string }
   | {
-      type: "button",
-      buttons: Array<{ payload: string, title: string, selected?: boolean }>
-    }
+    type: "button",
+    buttons: Array<{ payload: string, title: string, selected?: boolean }>
+  }
   | {
-      type: "custom",
-      content: any
-    };
+    type: "custom",
+    content: any
+  };
 
 export type ChatMessage = {
   message: MessageType,
@@ -74,7 +74,10 @@ type ChatroomProps = {
   onButtonClick: (message: string, payload: string) => *,
   onSendMessage: (message: string) => *,
   onToggleChat: () => *,
-  voiceLang: ?string
+  voiceLang: ?string,
+  isClientExternal: boolean,
+  endpoint: string,
+  idAttendant: ?string
 };
 
 type ChatroomState = {

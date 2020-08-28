@@ -28,14 +28,17 @@ type DebuggerViewProps = {
   voiceLang: ?string,
   messageBlacklist?: Array<string>,
   fetchOptions?: RequestOptions,
-  rasaToken?: string
+  rasaToken?: string,
+  isClientExternal?: boolean,
+  endpoint: string,
+  idAttendant: ?string
 };
 type DebuggerViewState = {
-  tracker: ?TrackerState
+  tracker: ?TrackerState,
 };
 class DebuggerView extends Component<DebuggerViewProps, DebuggerViewState> {
   state = {
-    tracker: null
+    tracker: null,
   };
   intervalHandle = 0;
   chatroomRef = React.createRef<ConnectedChatroom>();
@@ -58,15 +61,16 @@ class DebuggerView extends Component<DebuggerViewProps, DebuggerViewState> {
 
   fetchTracker(): Promise<TrackerState> {
     const { host, userId, rasaToken } = this.props;
-
-    if (rasaToken) {
-      return fetch(
-        `${host}/conversations/${userId}/tracker?token=${rasaToken}`
-      ).then(res => res.json());
-    } else {
-      throw Error(
-        'Rasa Auth Token is missing. Start your bot with the REST API enabled and specify an auth token. E.g. --enable_api --cors "*" --auth_token abc'
-      );
+    if (! this.props.isClientExternal) {
+      if (rasaToken) {
+        return fetch(
+          `${host}/conversations/${userId}/tracker?token=${rasaToken}`
+        ).then(res => res.json());
+      } else {
+        throw Error(
+          'Rasa Auth Token is missing. Start your bot with the REST API enabled and specify an auth token. E.g. --enable_api --cors "*" --auth_token abc'
+        );
+      }
     }
   }
 
@@ -135,6 +139,9 @@ class DebuggerView extends Component<DebuggerViewProps, DebuggerViewState> {
             voiceLang={this.props.voiceLang}
             welcomeMessage={this.props.welcomeMessage}
             fetchOptions={this.props.fetchOptions}
+            isClientExternal={this.props.isClientExternal}
+            endpoint={this.props.endpoint}
+            idAttendant={this.props.idAttendant}
           />
         </div>
       </div>

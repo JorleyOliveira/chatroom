@@ -17,11 +17,16 @@
     <script src="./dist/Chatroom.js"></script>
     <script type="text/javascript">
 window.chatroom = new window.DebugChatroom({
-  title: "Chat with a bot",
+  title: "Serasa",
   container: document.querySelector(".chat-container"),
-  welcomeMessage: "Hallo! How can I help you?",
-  host: "http://localhost:5005"
-  // speechRecognition: "en-US",
+  welcomeMessage: "Olá! Como eu posso te ajudar?",
+  host: "http://localhost:5005",
+  rasaToken: "rasaToken",
+  isClientExternal: true,
+  endpoint: "http://127.0.0.1:4001",
+  idAttendant: null,
+  speechRecognition: "pt-BR",
+  // voiceLang: "pt-BR"
 });
 </script>
   </body>

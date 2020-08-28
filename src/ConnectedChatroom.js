@@ -1,10 +1,12 @@
 // @flow
-import React, { Component } from "react";
+import React, { Component, } from "react";
+import socketIOClient from "socket.io-client";
 import type { ElementRef } from "react";
 
 import type { ChatMessage, MessageType } from "./Chatroom";
 import Chatroom from "./Chatroom";
 import { sleep, uuidv4 } from "./utils";
+import { ms } from "date-fns/locale";
 
 type ConnectedChatroomProps = {
   userId: string,
@@ -16,7 +18,10 @@ type ConnectedChatroomProps = {
   messageBlacklist: Array<string>,
   handoffIntent: string,
   fetchOptions?: RequestOptions,
-  voiceLang: ?string
+  voiceLang: ?string,
+  isClientExternal: boolean,
+  endpoint: string,
+  idAttendant: ?string,
 };
 type ConnectedChatroomState = {
   messages: Array<ChatMessage>,
@@ -24,45 +29,53 @@ type ConnectedChatroomState = {
   isOpen: boolean,
   waitingForBotResponse: boolean,
   currenthost: string,
-  currenttitle: string
+  currenttitle: string,
+  isClientExternal: boolean,
+  endpoint: string,
+  isTalkingToAttendant: boolean,
+  idAttendant: string,
 };
 
 type RasaMessage =
   | {| sender_id: string, text: string |}
   | {|
-      sender_id: string,
-      buttons: Array<{ title: string, payload: string, selected?: boolean }>,
-      text?: string
-    |}
-  | {| sender_id: string, image: string, text?: string |}
+  sender_id: string,
+    buttons: Array < { title: string, payload: string, selected?: boolean } >,
+      text ?: string
+        |}
+  | {| sender_id: string, image: string, text ?: string |}
   | {| sender_id: string, attachment: string, text ?: string |}
-  | {| sender_id: string, custom: string, text?: string |};
+  | {| sender_id: string, custom: string, text ?: string |};
 
 export default class ConnectedChatroom extends Component<
   ConnectedChatroomProps,
   ConnectedChatroomState
-> {
+  > {
+
   state = {
     messages: [],
     messageQueue: [],
     isOpen: false,
     waitingForBotResponse: false,
     currenthost: `${this.props.host}`,
-    currenttitle: `${this.props.title}`
+    currenttitle: `${this.props.title}`,
+    idAttendant: undefined,
+    endpoint: `${this.props.endpoint}`,
+    isTalkingToAttendant: undefined,
+    userId: '',
   };
-
   static defaultProps = {
     waitingTimeout: 5000,
     messageBlacklist: ["_restart", "_start", "/restart", "/start"],
     handoffIntent: "handoff"
   };
-
   handoffpayload = `\\/(${this.props.handoffIntent})\\b.*`;
-  handoffregex = new RegExp( this.handoffpayload );
+  handoffregex = new RegExp(this.handoffpayload);
   waitingForBotResponseTimer: ?TimeoutID = null;
   messageQueueInterval: ?IntervalID = null;
   chatroomRef = React.createRef<Chatroom>();
-
+  socket = undefined;
+  
   componentDidMount() {
     const messageDelay = 800; //delay between message in ms
     this.messageQueueInterval = window.setInterval(
@@ -70,7 +83,7 @@ export default class ConnectedChatroom extends Component<
       messageDelay
     );
 
-    if (this.props.welcomeMessage) {
+    if (this.props.welcomeMessage && this.props.isClientExternal) {
       const welcomeMessage = {
         message: { type: "text", text: this.props.welcomeMessage },
         time: Date.now(),
@@ -79,8 +92,27 @@ export default class ConnectedChatroom extends Component<
       };
       this.setState({ messages: [welcomeMessage] });
     }
+    const {endpoint, idAttendant} = this.state;
+    this.startSocketOn(endpoint, idAttendant);
   }
 
+  async startSocketOn(endpoint, idAttendant) {
+    if (this.socket == undefined) {
+      this.socket = socketIOClient(endpoint);      
+    }
+    if (this.socket) {
+      let channel = idAttendant || this.props.idAttendant;
+      if (channel != null) {
+        this.socket.on(channel, (data) => {
+          let msg = JSON.parse(data);
+          if (msg.isClientExternal != this.props.isClientExternal) {          
+            return this.sendMessageBetweenUserAttendant(msg);
+          }
+        });
+      }
+    }
+  }
+  
   componentWillUnmount() {
     if (this.waitingForBotResponseTimer != null) {
       window.clearTimeout(this.waitingForBotResponseTimer);
@@ -92,59 +124,151 @@ export default class ConnectedChatroom extends Component<
     }
   }
 
-  sendMessage = async (messageText: string) => {
-    if (messageText === "") return;
-
-    const messageObj = {
-      message: { type: "text", text: messageText },
+  sendMessageBetweenUserAttendant = async (msg) => {
+    if (msg === "") return;
+    const { isClientExternal } = this.props;
+    const { isTalkingToAttendant } = this.state;
+    const messageObj = isClientExternal && !isTalkingToAttendant ?
+    {
+      message: { type: "text", text: msg.message },
       time: Date.now(),
-      username: this.props.userId,
+      username: msg.sender,
       uuid: uuidv4()
-    };
-
-    if (!this.props.messageBlacklist.includes(messageText) && !messageText.match(this.handoffregex)) {
+    } :
+    this.createNewBotMessage({ type: "text", text: msg.message });
+    if (!this.props.messageBlacklist.includes(msg.message) && !msg.message.match(this.handoffregex)) {
+      let expandedMessages = [messageObj];
+      // Bot messages should be displayed in a queued manner. Not all at once
+      const messageQueue = [...this.state.messageQueue, ...expandedMessages];
       this.setState({
-        // Reveal all queued bot messages when the user sends a new message
-        messages: [
-          ...this.state.messages,
-          ...this.state.messageQueue,
-          messageObj
-        ],
-        messageQueue: []
+        messageQueue,
+        waitingForBotResponse: messageQueue.length > 0
       });
     }
 
-    this.setState({ waitingForBotResponse: true });
-    if (this.waitingForBotResponseTimer != null) {
-      window.clearTimeout(this.waitingForBotResponseTimer);
-    }
-    this.waitingForBotResponseTimer = setTimeout(() => {
-      this.setState({ waitingForBotResponse: false });
-    }, this.props.waitingTimeout);
-
-    const rasaMessageObj = {
-      message: messageObj.message.text,
-      sender: this.props.userId
-    };
-
-    const fetchOptions = Object.assign({}, {
-      method: "POST",
-      body: JSON.stringify(rasaMessageObj),
-      headers: {
-        "Content-Type": "application/json"
+    if (msg.message.match(this.handoffregex)) {
+      if (!isClientExternal) {
+        this.setState({
+          userId: msg.sender,
+          currenttitle: msg.sender
+        });
+        this.sendMessage(this.props.welcomeMessage);
+      } else {
+        const {idAttendant} = this.state;
+        this.socket.removeAllListeners(idAttendant);
+        this.setState({
+          isTalkingToAttendant: false,
+          idAttendant: undefined,
+          currenttitle: this.props.title
+        });
+        this.sendMessage(msg.message);
       }
-    }, this.props.fetchOptions);
+    }
+  }
 
-    const response = await fetch(
-      `${this.state.currenthost}/webhooks/rest/webhook`,
-      fetchOptions
-    );
-    const messages = await response.json();
+  sendMessage = async (messageText: string) => {
+    if (messageText === "") return;
+    const { isTalkingToAttendant, idAttendant, endpoint} = this.state;
+    const { isClientExternal} = this.props;
+    if (isClientExternal) {
+      const messageObj = {
+        message: { type: "text", text: messageText },
+        time: Date.now(),
+        username: this.props.userId,
+        uuid: uuidv4()
+      };
 
-    this.parseMessages(messages);
+      if (!this.props.messageBlacklist.includes(messageText) && !messageText.match(this.handoffregex)) {
+        this.setState({
+          // Reveal all queued bot messages when the user sends a new message
+          messages: [
+            ...this.state.messages,
+            ...this.state.messageQueue,
+            messageObj
+          ],
+          messageQueue: []
+        });
+      }
 
-    if (window.ga != null) {
-      window.ga("send", "event", "chat", "chat-message-sent");
+      this.setState({ waitingForBotResponse: true });
+      if (this.waitingForBotResponseTimer != null) {
+        window.clearTimeout(this.waitingForBotResponseTimer);
+      }
+      this.waitingForBotResponseTimer = setTimeout(() => {
+        this.setState({ waitingForBotResponse: false });
+      }, this.props.waitingTimeout);
+
+      if (!isTalkingToAttendant) {
+        const rasaMessageObj = {
+          message: messageObj.message.text,
+          sender: this.props.userId
+        };
+
+        const fetchOptions = Object.assign({}, {
+          method: "POST",
+          body: JSON.stringify(rasaMessageObj),
+          headers: {
+            "Content-Type": "application/json"
+          }
+        }, this.props.fetchOptions);
+
+        const response = await fetch(
+          `${this.state.currenthost}/webhooks/rest/webhook`,
+          fetchOptions
+        );
+        const messages = await response.json();
+
+        this.parseMessages(messages);
+
+        if (window.ga != null) {
+          window.ga("send", "event", "chat", "chat-message-sent");
+        }
+      } else {     
+        // send message to attendant        
+        const rasaMessageObj = {
+          message: messageObj.message.text,
+          sender: this.props.userId,
+          output: idAttendant,
+          isClientExternal: isClientExternal
+        };
+        if (this.socket) {
+          this.socket.emit("xpto", JSON.stringify(rasaMessageObj));
+        }
+        // CLEAN UP THE EFFECT
+        // return () => socket.disconnect();
+      }
+    } else {
+
+      const messageObj = {
+        message: { type: "text", text: messageText },        
+        time: Date.now(),
+        username: this.props.idAttendant,
+        uuid: uuidv4()
+      };
+
+      if (!this.props.messageBlacklist.includes(messageText) && !messageText.match(this.handoffregex)) {
+        let expandedMessages = [messageObj];
+        // Bot messages should be displayed in a queued manner. Not all at once
+        const messageQueue = [...this.state.messageQueue, ...expandedMessages];
+        this.setState({
+          messageQueue,
+          waitingForBotResponse: messageQueue.length > 0
+        });
+      }
+
+      // send message to user        
+      const rasaMessageObj = {
+        message: messageObj.message.text,
+        sender: this.props.idAttendant,
+        output: this.props.idAttendant,
+        isClientExternal: isClientExternal
+      };
+      if (this.socket) {
+        this.socket.emit("xpto", JSON.stringify(rasaMessageObj));
+      }
+      // CLEAN UP THE EFFECT
+      // return () => socket.disconnect();
+
     }
   };
 
@@ -197,17 +321,36 @@ export default class ConnectedChatroom extends Component<
 
       if (message.custom && message.custom.handoff_host) {
         validMessage = true;
-        this.setState({
-          currenthost: message.custom.handoff_host
-        });
-        if (message.custom.title) {
+
+        const isHttpRequest = message.custom.handoff_host.startsWith("http://") || message.custom.handoff_host.startsWith("https://");
+        if (isHttpRequest) {
           this.setState({
-            currenttitle: message.custom.title
-          })
+            currenthost: message.custom.handoff_host
+          });
+          if (message.custom.title) {
+            this.setState({
+              currenttitle: message.custom.title,              
+            })
+          }
+          this.sendMessage(`/${this.props.handoffIntent}{"from_host":"${this.props.host}"}`);
+          return;
+        } else {
+          const {endpoint, idAttendant} = this.state;          
+          if (idAttendant === undefined || idAttendant != message.custom.handoff_host) {
+            this.setState({
+              currenttitle: message.custom.title,
+              isTalkingToAttendant: true,
+              idAttendant: message.custom.handoff_host
+            });
+            this.startSocketOn(endpoint, message.custom.handoff_host);
+          } else {
+            this.setState({
+              currenttitle: message.custom.title,
+              isTalkingToAttendant: true,              
+            });
+          }
+          this.sendMessage(`/${this.props.handoffIntent}{"from_host":"${this.props.host}"}`);
         }
-        console.log(`switching to ${message.custom.handoff_host}`);
-        this.sendMessage(`/${this.props.handoffIntent}{"from_host":"${this.props.host}"}`);
-        return;
       }
 
       if (validMessage === false)
@@ -236,6 +379,7 @@ export default class ConnectedChatroom extends Component<
       });
     }
   };
+
 
   handleButtonClick = (buttonTitle: string, payload: string) => {
     this.sendMessage(payload);
